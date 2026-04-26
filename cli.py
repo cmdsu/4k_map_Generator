@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--key_style", type=str, default="jack", choices=["jack", "stream", "tech", "speed"])
     parser.add_argument("--bpm", type=float, default=0.0, help="Manual BPM. Use 0 for auto.")
     parser.add_argument("--offset", type=int, default=None, help="Manual offset in ms.")
+    parser.add_argument("--skip_audio_analysis", action="store_true", help="Use a synthetic analysis for fast local regression tests.")
+    parser.add_argument("--duration_ms", type=int, default=60000, help="Duration used with --skip_audio_analysis.")
     parser.add_argument("--subdivisions", type=str, default="1/2,1/4,1/8", help="Comma-separated allowed subdivisions.")
     parser.add_argument("--max_chord_size", type=int, default=None)
     parser.add_argument("--ln_ratio", type=float, default=0.1)
@@ -47,13 +49,35 @@ def main():
     with open(input_path, "rb") as f:
         audio_bytes = f.read()
 
-    print("[DEBUG] Analyzing audio...")
-    analyzer = AudioAnalyzer(
-        audio_bytes,
-        args.bpm if args.bpm > 0 else None,
-        args.offset,
-    )
-    analysis = analyzer.analyze()
+    if args.skip_audio_analysis:
+        if args.bpm <= 0:
+            print("Error: --skip_audio_analysis requires --bpm.")
+            sys.exit(1)
+        step = 60000.0 / args.bpm
+        offset = args.offset or 0
+        beat_times = []
+        t = float(offset)
+        while t < args.duration_ms:
+            beat_times.append(int(round(t)))
+            t += step
+        analysis = {
+            "bpm": args.bpm,
+            "offset_ms": offset,
+            "duration_ms": args.duration_ms,
+            "onset_times_ms": beat_times,
+            "beat_times_ms": beat_times,
+            "energy_curve": [1.0 if i % 4 == 0 else 0.35 for i in range(1000)],
+            "silent_regions": [],
+        }
+    else:
+        print("[DEBUG] Analyzing audio...")
+        analyzer = AudioAnalyzer(
+            audio_bytes,
+            args.bpm if args.bpm > 0 else None,
+            args.offset,
+        )
+        analysis = analyzer.analyze()
+    analysis["offset_ms"] -= 20
     print(f"[DEBUG] BPM: {analysis['bpm']:.2f}, Offset: {analysis['offset_ms']}ms")
 
     hybrid_weights = {

@@ -38,7 +38,7 @@ def max_chord_bounds_for(chart_type: str, key_style: Optional[str], hybrid_weigh
         upper = 4 if weights["jack"] > 0 else 3 if weights["stream"] > 0 else 2
         return 2, upper, min(2, upper)
     if key_style == "jack":
-        return 2, 4, 2
+        return 2, 4, 4
     if key_style == "stream":
         return 2, 3, 2
     return 1, 3, 1
@@ -56,13 +56,12 @@ def clamp_max_chord_size(config: DifficultyConfig, style: Optional[str] = None) 
 
 
 def recommended_subdivisions(bpm: float, chart_type: str, key_style: Optional[str], target_star: Optional[float]) -> list[str]:
-    if target_star is not None:
-        return ["1/2", "1/4", "1/8"]
-
     if chart_type == "vibro":
         return ["1/4", "1/8", "1/12", "1/16"]
     if key_style == "jack":
-        return ["1/4", "1/8"] if bpm <= 180 else ["1/2", "1/4"]
+        return ["1/4"] if bpm <= 180 else ["1/2"]
+    if target_star is not None:
+        return ["1/2", "1/4", "1/8"]
     if key_style == "stream":
         return ["1/4", "1/8"] if bpm <= 320 else ["1/2", "1/4"]
     if key_style == "speed":

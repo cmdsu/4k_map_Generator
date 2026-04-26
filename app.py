@@ -125,6 +125,7 @@ if st.button(_t("生成 .osz 练习谱", "Generate .osz")):
                 manual_offset if use_manual_offset else None,
             )
             analysis = analyzer.analyze()
+            analysis["offset_ms"] -= 20
 
             st.success(_t(
                 f"检测到 BPM: {analysis['bpm']:.2f}, Offset: {analysis['offset_ms']}ms",

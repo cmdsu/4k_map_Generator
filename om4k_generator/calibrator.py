@@ -1,5 +1,6 @@
 import random
 import bisect
+import math
 from dataclasses import replace
 from typing import Any, Dict, List, Set, Tuple
 
@@ -13,7 +14,16 @@ from .validator import Validator
 
 def build_snap_candidates(analysis: Dict[str, Any], config: DifficultyConfig) -> List[int]:
     allowed_subdivisions = config.allowed_subdivisions
-    if config.target_star is None:
+    if config.key_style == "jack":
+        style_subdivisions = recommended_subdivisions(
+            analysis["bpm"],
+            config.chart_type,
+            config.key_style,
+            None,
+        )
+        filtered = [subdivision for subdivision in allowed_subdivisions if subdivision in style_subdivisions]
+        allowed_subdivisions = filtered or style_subdivisions
+    elif config.target_star is None:
         allowed_subdivisions = recommended_subdivisions(
             analysis["bpm"],
             config.chart_type,
@@ -60,6 +70,7 @@ def generate_to_target_sr(
             accent_times_ms=accent_snap_points,
         )
         clean_notes = Validator.validate_and_fix(raw_notes, config, analysis["silent_regions"], snap_points)
+        clean_notes = _smooth_jack_gaps(clean_notes, analysis, snap_points, accent_snap_points, config)
         return clean_notes, DifficultyEstimator.estimate_sr(clean_notes, analysis["duration_ms"]), True, 1
 
     target = config.target_star
@@ -67,8 +78,15 @@ def generate_to_target_sr(
     best_sr = 0.0
     best_diff = float("inf")
 
-    density = max(0.15, min(3.0, target / 4.0))
-    chord_probability = min(1.0, max(0.0, config.chord_probability + (target - 3.0) * 0.08))
+    if config.key_style == "jack":
+        if target < 3.5:
+            density = max(0.10, min(1.5, target / 7.5))
+        else:
+            density = max(0.12, min(1.5, target / 7.0))
+        chord_probability = min(1.0, max(0.88, config.chord_probability + (target - 3.0) * 0.08))
+    else:
+        density = max(0.15, min(3.0, target / 4.0))
+        chord_probability = min(1.0, max(0.0, config.chord_probability + (target - 3.0) * 0.08))
 
     for attempt in range(1, max_attempts + 1):
         trial_config = replace(config, chord_probability=chord_probability)
@@ -84,6 +102,7 @@ def generate_to_target_sr(
             accent_times_ms=accent_snap_points,
         )
         clean_notes = Validator.validate_and_fix(raw_notes, trial_config, analysis["silent_regions"], snap_points)
+        clean_notes = _smooth_jack_gaps(clean_notes, analysis, snap_points, accent_snap_points, trial_config)
         est_sr = DifficultyEstimator.estimate_sr(clean_notes, analysis["duration_ms"])
         diff = abs(est_sr - target)
 
@@ -99,7 +118,7 @@ def generate_to_target_sr(
         if est_sr > target:
             ratio = target / max(est_sr, 0.01)
             density *= max(0.55, min(0.95, ratio))
-            chord_probability = max(0.0, chord_probability - 0.08)
+            chord_probability = max(0.88 if config.key_style == "jack" else 0.0, chord_probability - 0.08)
         else:
             ratio = target / max(est_sr, 0.05)
             density *= min(1.35, max(1.05, ratio ** 0.35))
@@ -151,32 +170,53 @@ def _refine_upward(
     for note in sorted(current_notes, key=lambda n: (n.time_ms, n.lane)):
         last_lane_time[note.lane] = note.time_ms
 
-    for time_ms in snap_points:
+    jack_anchor_lanes: List[int] = []
+    ordered_times = list(snap_points)
+    if config.key_style == "jack":
+        empty_accent_times = [time_ms for time_ms in snap_points if time_ms in accent_snap_points and not existing.get(time_ms)]
+        occupied_times = [time_ms for time_ms in snap_points if time_ms not in empty_accent_times]
+        ordered_times = empty_accent_times + occupied_times
+
+    for time_ms in ordered_times:
         lanes_at_time = existing.setdefault(time_ms, set())
         if len(lanes_at_time) >= config.max_chord_size:
-            continue
-        if config.key_style == "jack" and lanes_at_time and time_ms not in accent_snap_points:
+            if config.key_style == "jack":
+                jack_anchor_lanes = sorted(lanes_at_time)
             continue
 
         additions_allowed = config.max_chord_size - len(lanes_at_time)
-        if config.key_style == "jack" and time_ms not in accent_snap_points:
-            additions_allowed = min(additions_allowed, 1 if not lanes_at_time else 0)
+        if config.key_style == "jack":
+            new_lanes = _jack_refine_lanes(
+                lanes_at_time,
+                jack_anchor_lanes,
+                time_ms in accent_snap_points,
+                config.max_chord_size,
+                target,
+            )
+        else:
+            new_lanes = []
+            for lane in sorted(range(4), key=lambda l: last_lane_time[l]):
+                if additions_allowed <= 0:
+                    break
+                if lane in lanes_at_time:
+                    continue
 
-        for lane in sorted(range(4), key=lambda l: last_lane_time[l]):
-            if additions_allowed <= 0:
-                break
-            if lane in lanes_at_time:
-                continue
+                new_lanes.append(lane)
+                additions_allowed -= 1
 
+        for lane in new_lanes:
             pending.append(NoteObject(time_ms=time_ms, lane=lane))
             lanes_at_time.add(lane)
             last_lane_time[lane] = time_ms
-            additions_allowed -= 1
+
+        if config.key_style == "jack" and lanes_at_time:
+            jack_anchor_lanes = sorted(lanes_at_time)
 
         if len(pending) % 16 != 0:
             continue
 
         candidate = Validator.validate_and_fix(current_notes + pending, config, analysis["silent_regions"], snap_points)
+        candidate = _smooth_jack_gaps(candidate, analysis, snap_points, accent_snap_points, config)
         candidate_sr = DifficultyEstimator.estimate_sr(candidate, analysis["duration_ms"])
         candidate_diff = abs(candidate_sr - target)
 
@@ -193,6 +233,7 @@ def _refine_upward(
 
     if pending:
         candidate = Validator.validate_and_fix(current_notes + pending, config, analysis["silent_regions"], snap_points)
+        candidate = _smooth_jack_gaps(candidate, analysis, snap_points, accent_snap_points, config)
         candidate_sr = DifficultyEstimator.estimate_sr(candidate, analysis["duration_ms"])
         candidate_diff = abs(candidate_sr - target)
         if candidate_diff < best_diff:
@@ -201,6 +242,112 @@ def _refine_upward(
             best_diff = candidate_diff
 
     return best_notes, best_sr, best_diff <= tolerance
+
+
+def _jack_refine_lanes(
+    lanes_at_time: Set[int],
+    anchor_lanes: List[int],
+    is_accent: bool,
+    max_chord_size: int,
+    target: float,
+) -> List[int]:
+    if len(lanes_at_time) >= max_chord_size:
+        return []
+
+    anchors = [lane for lane in anchor_lanes if 0 <= lane <= 3] or [0]
+    ordered = anchors + [lane for lane in [0, 1, 2, 3] if lane not in anchors]
+
+    if not is_accent:
+        if lanes_at_time:
+            if target < 4.5:
+                return []
+            desired_chord_size = 2 if target < 5.5 else min(3, max_chord_size)
+        else:
+            return []
+    elif target < 4.5:
+        desired_chord_size = 2
+    elif target < 5.5:
+        desired_chord_size = min(3, max_chord_size)
+    elif target < 6.5:
+        desired_chord_size = max_chord_size
+    else:
+        desired_chord_size = max_chord_size
+
+    desired_chord_size = max(2, min(max_chord_size, desired_chord_size))
+    additions_needed = max(0, desired_chord_size - len(lanes_at_time))
+    if additions_needed <= 0:
+        return []
+
+    additions = []
+    for lane in ordered:
+        if lane in lanes_at_time or lane in additions:
+            continue
+        additions.append(lane)
+        if len(additions) >= additions_needed:
+            break
+    return additions
+
+
+def _smooth_jack_gaps(
+    notes: List[NoteObject],
+    analysis: Dict[str, Any],
+    snap_points: List[int],
+    accent_snap_points: Set[int],
+    config: DifficultyConfig,
+) -> List[NoteObject]:
+    if config.key_style != "jack" or not notes:
+        return notes
+
+    rows: Dict[int, Set[int]] = {}
+    for note in notes:
+        rows.setdefault(note.time_ms, set()).add(note.lane)
+
+    beat_length = 60000.0 / max(1.0, analysis["bpm"])
+    gap_threshold = int(beat_length * 2.05)
+    snap_set = set(snap_points)
+    accent_times = sorted(t for t in accent_snap_points if t in snap_set)
+    all_snap_times = sorted(snap_set)
+    additions: List[NoteObject] = []
+
+    sorted_times = sorted(rows)
+    for prev_time, next_time in zip(sorted_times, sorted_times[1:]):
+        gap = next_time - prev_time
+        if gap < gap_threshold:
+            continue
+
+        between = [t for t in accent_times if prev_time < t < next_time]
+        if not between:
+            between = [t for t in all_snap_times if prev_time < t < next_time]
+        if not between:
+            continue
+
+        shared = sorted(rows[prev_time] & rows[next_time])
+        if shared:
+            lane = shared[0]
+        else:
+            lane = sorted(rows[prev_time])[0]
+
+        inserts_needed = max(1, math.ceil(gap / max(1, gap_threshold)) - 1)
+        inserts_needed = min(inserts_needed, len(between))
+        if inserts_needed <= 0:
+            continue
+
+        chosen_times = []
+        for index in range(1, inserts_needed + 1):
+            pick = int(round(index * (len(between) + 1) / (inserts_needed + 1))) - 1
+            pick = max(0, min(len(between) - 1, pick))
+            time_ms = between[pick]
+            if time_ms not in chosen_times:
+                chosen_times.append(time_ms)
+
+        for time_ms in chosen_times:
+            rows.setdefault(time_ms, set()).add(lane)
+            additions.append(NoteObject(time_ms=time_ms, lane=lane))
+
+    if not additions:
+        return notes
+
+    return Validator.validate_and_fix(notes + additions, config, analysis["silent_regions"], snap_points)
 
 
 def build_accent_snap_points(analysis: Dict[str, Any], snap_points: List[int]) -> Set[int]:

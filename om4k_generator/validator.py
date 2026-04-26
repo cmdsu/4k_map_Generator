@@ -17,7 +17,10 @@ class Validator:
 
         max_chord_size = clamp_max_chord_size(config) if config else 4
         max_jack_length = config.max_jack_length if config and config.max_jack_length > 0 else 9999
+        if config and config.key_style == "jack":
+            max_jack_length = 9999
         allow_ln = config is None or config.chart_type in ["ln", "hybrid"]
+        ln_tail_gap_ms = 30
 
         if min_interval_ms is None:
             min_interval_ms = 60 if config and config.key_style == "jack" else 40
@@ -30,6 +33,7 @@ class Validator:
 
         lane_block_until = {0: -1, 1: -1, 2: -1, 3: -1}
         last_lane_time = {0: -999999, 1: -999999, 2: -999999, 3: -999999}
+        last_ln_tail_time = {0: -999999, 1: -999999, 2: -999999, 3: -999999}
         jack_streaks = {0: 0, 1: 0, 2: 0, 3: 0}
 
         sorted_silent_regions = sorted(silent_regions)
@@ -53,6 +57,8 @@ class Validator:
                 if n.lane in accepted_lanes:
                     continue
                 if time_ms <= lane_block_until[n.lane]:
+                    continue
+                if time_ms - last_ln_tail_time[n.lane] <= ln_tail_gap_ms:
                     continue
                 if time_ms - last_lane_time[n.lane] < min_interval_ms:
                     continue
@@ -82,5 +88,7 @@ class Validator:
                 fixed.append(n)
                 last_lane_time[n.lane] = time_ms
                 lane_block_until[n.lane] = n.end_time_ms if n.is_ln else time_ms
+                if n.is_ln and n.end_time_ms is not None:
+                    last_ln_tail_time[n.lane] = n.end_time_ms
 
         return fixed
