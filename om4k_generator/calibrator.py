@@ -1,6 +1,7 @@
 import random
+import bisect
 from dataclasses import replace
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from .difficulty_estimator import DifficultyEstimator
 from .grid_builder import GridBuilder
@@ -48,9 +49,16 @@ def generate_to_target_sr(
     tolerance: float = 0.10,
     max_attempts: int = 24,
 ) -> Tuple[List[NoteObject], float, bool, int]:
+    accent_snap_points = build_accent_snap_points(analysis, snap_points)
+
     if config.target_star is None:
         generator = PatternGenerator(config)
-        raw_notes = generator.generate(snap_points, analysis["energy_curve"], analysis["silent_regions"])
+        raw_notes = generator.generate(
+            snap_points,
+            analysis["energy_curve"],
+            analysis["silent_regions"],
+            accent_times_ms=accent_snap_points,
+        )
         clean_notes = Validator.validate_and_fix(raw_notes, config, analysis["silent_regions"], snap_points)
         return clean_notes, DifficultyEstimator.estimate_sr(clean_notes, analysis["duration_ms"]), True, 1
 
@@ -73,6 +81,7 @@ def generate_to_target_sr(
             analysis["energy_curve"],
             analysis["silent_regions"],
             density_multiplier=density,
+            accent_times_ms=accent_snap_points,
         )
         clean_notes = Validator.validate_and_fix(raw_notes, trial_config, analysis["silent_regions"], snap_points)
         est_sr = DifficultyEstimator.estimate_sr(clean_notes, analysis["duration_ms"])
@@ -104,6 +113,7 @@ def generate_to_target_sr(
             config,
             analysis,
             snap_points,
+            accent_snap_points,
         )
         if abs(refined_sr - target) < best_diff:
             best_notes = refined_notes
@@ -124,6 +134,7 @@ def _refine_upward(
     config: DifficultyConfig,
     analysis: Dict[str, Any],
     snap_points: List[int],
+    accent_snap_points: Set[int],
 ) -> Tuple[List[NoteObject], float, bool]:
     current_notes = list(notes)
     current_sr = DifficultyEstimator.estimate_sr(current_notes, analysis["duration_ms"])
@@ -144,15 +155,23 @@ def _refine_upward(
         lanes_at_time = existing.setdefault(time_ms, set())
         if len(lanes_at_time) >= config.max_chord_size:
             continue
+        if config.key_style == "jack" and lanes_at_time and time_ms not in accent_snap_points:
+            continue
+
+        additions_allowed = config.max_chord_size - len(lanes_at_time)
+        if config.key_style == "jack" and time_ms not in accent_snap_points:
+            additions_allowed = min(additions_allowed, 1 if not lanes_at_time else 0)
 
         for lane in sorted(range(4), key=lambda l: last_lane_time[l]):
+            if additions_allowed <= 0:
+                break
             if lane in lanes_at_time:
                 continue
 
             pending.append(NoteObject(time_ms=time_ms, lane=lane))
             lanes_at_time.add(lane)
             last_lane_time[lane] = time_ms
-            break
+            additions_allowed -= 1
 
         if len(pending) % 16 != 0:
             continue
@@ -182,6 +201,76 @@ def _refine_upward(
             best_diff = candidate_diff
 
     return best_notes, best_sr, best_diff <= tolerance
+
+
+def build_accent_snap_points(analysis: Dict[str, Any], snap_points: List[int]) -> Set[int]:
+    if not snap_points:
+        return set()
+
+    beat_length = 60000.0 / max(1.0, analysis["bpm"])
+    max_distance = max(35, min(70, int(beat_length * 0.12)))
+    accents: Set[int] = set()
+    beat_times = [int(t) for t in analysis.get("beat_times_ms", [])]
+
+    for time_ms in beat_times:
+        closest = _nearest_snap_point(snap_points, int(time_ms))
+        if closest is not None and abs(closest - int(time_ms)) <= max_distance:
+            accents.add(closest)
+
+    for time_ms in analysis.get("onset_times_ms", []):
+        time_ms = int(time_ms)
+        near_beat = _nearest_distance(beat_times, time_ms)
+        energy_score = _energy_score_at(analysis, time_ms)
+        if near_beat is not None and near_beat <= max_distance:
+            pass
+        elif energy_score < 0.65:
+            continue
+
+        closest = _nearest_snap_point(snap_points, time_ms)
+        if closest is not None and abs(closest - time_ms) <= max_distance:
+            accents.add(closest)
+
+    return accents
+
+
+def _nearest_snap_point(snap_points: List[int], time_ms: int) -> int | None:
+    idx = bisect.bisect_left(snap_points, time_ms)
+    candidates = []
+    if idx < len(snap_points):
+        candidates.append(snap_points[idx])
+    if idx > 0:
+        candidates.append(snap_points[idx - 1])
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: abs(candidate - time_ms))
+
+
+def _nearest_distance(values: List[int], time_ms: int) -> int | None:
+    if not values:
+        return None
+    idx = bisect.bisect_left(values, time_ms)
+    candidates = []
+    if idx < len(values):
+        candidates.append(abs(values[idx] - time_ms))
+    if idx > 0:
+        candidates.append(abs(values[idx - 1] - time_ms))
+    return min(candidates) if candidates else None
+
+
+def _energy_score_at(analysis: Dict[str, Any], time_ms: int) -> float:
+    curve = [float(v) for v in analysis.get("energy_curve", [])]
+    if not curve or analysis["duration_ms"] <= 0:
+        return 1.0
+
+    values = sorted(curve)
+    low = values[min(len(values) - 1, int(len(values) * 0.25))]
+    high = values[min(len(values) - 1, int(len(values) * 0.90))]
+    if high <= low:
+        return 0.5
+
+    idx = int((time_ms / analysis["duration_ms"]) * (len(curve) - 1))
+    idx = max(0, min(len(curve) - 1, idx))
+    return max(0.0, min(1.0, (curve[idx] - low) / (high - low)))
 
 
 def _target_skeleton_divisor(config: DifficultyConfig) -> int:

@@ -1,5 +1,5 @@
 import random
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from .models import DifficultyConfig, NoteObject
 from .style_rules import clamp_max_chord_size, normalize_hybrid_weights
@@ -60,8 +60,10 @@ class PatternGenerator:
             return 45, 35
         return 50, 35
 
-    def _get_chord_size(self, style: Optional[str], is_peak: bool) -> int:
+    def _get_chord_size(self, style: Optional[str], is_peak: bool, is_accent: bool) -> int:
         if style == "speed" and not is_peak:
+            return 1
+        if style == "jack" and not is_accent:
             return 1
 
         max_chord_size = clamp_max_chord_size(self.config, style)
@@ -93,6 +95,7 @@ class PatternGenerator:
         energy_curve: List[float],
         silent_regions: List[Tuple[int, int]],
         density_multiplier: float = 1.0,
+        accent_times_ms: Optional[Set[int]] = None,
     ) -> List[NoteObject]:
         notes = []
         last_lanes: List[int] = []
@@ -125,7 +128,8 @@ class PatternGenerator:
                 continue
 
             is_peak = self._is_energy_peak(t, energy_curve, max_time, energy_peak_threshold)
-            chord_size = self._get_chord_size(style, is_peak)
+            is_accent = accent_times_ms is None or t in accent_times_ms
+            chord_size = self._get_chord_size(style, is_peak, is_accent)
             available_lanes = [lane for lane in self.lanes if t - last_lane_times[lane] >= min_lane_interval]
             if not available_lanes:
                 continue
