@@ -1,6 +1,6 @@
 # osu!mania 4K Auto Chart Generator
 
-> [中文文档](./README_CN.md)
+> [中文文档](./README.md)
 
 A rule-based osu!mania 4K practice chart generator. It analyzes audio, applies style-specific pattern rules, calibrates target SR, validates note legality, and exports osu!-importable `.osu` / `.osz` files.
 
