@@ -14,9 +14,6 @@ class PatternGenerator:
         self.stream_index = 0
         self.tech_patterns = [[0, 2, 1, 3], [0, 1, 3, 2], [1, 3, 0, 2], [2, 0, 3, 1]]
         self.tech_index = 0
-        self.vibro_lanes = list(config.vibro_options.get("lanes", [1, 2])) if config.vibro_options else [1, 2]
-        self.vibro_lanes = [lane for lane in self.vibro_lanes if lane in self.lanes] or [1, 2]
-        self.vibro_index = 0
         self.jack_stack_lanes: List[int] = []
         self.jack_stack_remaining = 0
         self.jack_quad_streak = 0
@@ -39,8 +36,6 @@ class PatternGenerator:
         return float(energy_curve[idx]) >= threshold
 
     def _select_style(self) -> Optional[str]:
-        if self.config.chart_type == "vibro":
-            return "vibro"
         if self.config.chart_type == "hybrid":
             roll = random.random()
             cumulative = 0.0
@@ -52,8 +47,6 @@ class PatternGenerator:
         return self.config.key_style or "tech"
 
     def _timing_limits(self, style: Optional[str], density_multiplier: float, median_interval: float) -> tuple[float, float]:
-        if style == "vibro":
-            return 35, 20
         if style == "jack":
             interval = max(55, min(120, median_interval * 0.90))
             return interval, interval
@@ -87,15 +80,17 @@ class PatternGenerator:
         if style == "jack":
             if self.config.target_star is None:
                 floor = 0.94
-            elif self.config.target_star >= 4.5:
+            elif self.config.target_star >= 5.5:
                 floor = 0.88
+            elif self.config.target_star >= 4.5:
+                floor = 0.62
+            elif self.config.target_star >= 3.5:
+                floor = 0.28
             else:
-                floor = 0.55
+                floor = 0.08
             base_probability = max(base_probability, floor)
         elif style == "stream":
             base_probability = max(base_probability, 0.45)
-        elif style == "vibro":
-            base_probability = max(base_probability, 0.60)
         elif style == "tech":
             base_probability = max(base_probability, 0.25)
 
@@ -147,15 +142,18 @@ class PatternGenerator:
         silent_regions: List[Tuple[int, int]],
         density_multiplier: float = 1.0,
         accent_times_ms: Optional[Set[int]] = None,
+        bpm: float = 120.0,
     ) -> List[NoteObject]:
         notes = []
         last_lanes: List[int] = []
         recent_times = []
         last_lane_times = {0: -9999, 1: -9999, 2: -9999, 3: -9999}
         jack_streaks = {0: 0, 1: 0, 2: 0, 3: 0}
+        last_note_time: Optional[int] = None
         max_time = max(snap_points) if snap_points else 0
         energy_peak_threshold = self._energy_peak_threshold(energy_curve)
         median_interval = self._median_interval(snap_points)
+        beat_length = 60000.0 / max(1.0, bpm)
 
         max_nps = max(3.0, 20.0 * density_multiplier)
         silent_regions = sorted(silent_regions)
@@ -171,14 +169,20 @@ class PatternGenerator:
             style = self._select_style()
             is_accent = accent_times_ms is None or t in accent_times_ms
             min_lane_interval, global_min_interval = self._timing_limits(style, density_multiplier, median_interval)
+            is_reasonable_rest = self._is_reasonable_rest(t, energy_curve, max_time, silent_regions)
+            must_place = last_note_time is None or (
+                last_note_time is not None
+                and (t - last_note_time) >= self._continuity_limit_ms(style, beat_length, density_multiplier)
+                and not is_reasonable_rest
+            )
 
             while recent_times and t - recent_times[0] > 1000:
                 recent_times.pop(0)
-            if len(recent_times) >= max_nps:
+            if not must_place and len(recent_times) >= max_nps:
                 continue
-            if recent_times and (t - recent_times[-1]) < global_min_interval:
+            if not must_place and recent_times and (t - recent_times[-1]) < global_min_interval:
                 continue
-            if density_multiplier < 1.0:
+            if density_multiplier < 1.0 and not must_place:
                 if style == "jack":
                     if not is_accent:
                         jack_density_meter += density_multiplier
@@ -210,6 +214,7 @@ class PatternGenerator:
 
             recent_times.append(t)
             last_lanes = chosen
+            last_note_time = t
 
         if self.config.chart_type in ["ln", "hybrid"]:
             notes = self._convert_to_lns(notes)
@@ -225,8 +230,6 @@ class PatternGenerator:
         jack_streaks: dict[int, int],
         last_lane_times: dict[int, int],
     ) -> List[int]:
-        if style == "vibro":
-            return self._choose_vibro_lanes(chord_size, available_lanes, last_lanes)
         if style == "jack":
             return self._choose_jack_lanes(chord_size, available_lanes, last_lanes, jack_streaks)
         if style == "stream":
@@ -234,29 +237,6 @@ class PatternGenerator:
         if style == "tech":
             return self._choose_tech_lanes(chord_size, available_lanes)
         return self._choose_speed_lanes(chord_size, available_lanes, last_lane_times)
-
-    def _choose_vibro_lanes(self, chord_size: int, available_lanes: List[int], last_lanes: List[int]) -> List[int]:
-        chosen = []
-        for _ in range(len(self.vibro_lanes)):
-            lane = self.vibro_lanes[self.vibro_index % len(self.vibro_lanes)]
-            self.vibro_index += 1
-            if lane in available_lanes:
-                chosen.append(lane)
-                break
-
-        if not chosen:
-            chosen.append(random.choice(available_lanes))
-
-        anchors = [lane for lane in last_lanes if lane in available_lanes and lane not in chosen]
-        while anchors and len(chosen) < chord_size:
-            lane = anchors.pop(0)
-            chosen.append(lane)
-
-        remaining = [lane for lane in available_lanes if lane not in chosen]
-        if remaining and len(chosen) < chord_size:
-            chosen.extend(random.sample(remaining, min(chord_size - len(chosen), len(remaining))))
-
-        return chosen
 
     def _choose_jack_lanes(
         self,
@@ -384,6 +364,46 @@ class PatternGenerator:
             return 80.0
         intervals.sort()
         return float(intervals[len(intervals) // 2])
+
+    @staticmethod
+    def _continuity_limit_ms(style: Optional[str], beat_length: float, density_multiplier: float) -> float:
+        if style == "stream":
+            return beat_length * (1.25 if density_multiplier >= 0.8 else 1.5)
+        if style == "jack":
+            return beat_length * (1.00 if density_multiplier >= 0.8 else 1.10)
+        if style == "speed":
+            return beat_length * (1.1 if density_multiplier >= 0.8 else 1.35)
+        return beat_length * (1.5 if density_multiplier >= 0.8 else 1.75)
+
+    @staticmethod
+    def _normalized_energy_at(t: int, energy_curve: List[float], max_time: int) -> float:
+        if not energy_curve or max_time <= 0:
+            return 1.0
+
+        values = sorted(float(v) for v in energy_curve if v is not None)
+        if not values:
+            return 1.0
+
+        low = values[min(len(values) - 1, int(len(values) * 0.25))]
+        high = values[min(len(values) - 1, int(len(values) * 0.90))]
+        if high <= low:
+            return 0.5
+
+        idx = int((t / max_time) * (len(energy_curve) - 1))
+        idx = max(0, min(len(energy_curve) - 1, idx))
+        return max(0.0, min(1.0, (float(energy_curve[idx]) - low) / (high - low)))
+
+    def _is_reasonable_rest(
+        self,
+        t: int,
+        energy_curve: List[float],
+        max_time: int,
+        silent_regions: List[Tuple[int, int]],
+    ) -> bool:
+        for start, end in silent_regions:
+            if start <= t <= end:
+                return True
+        return self._normalized_energy_at(t, energy_curve, max_time) < 0.35
 
     def _convert_to_lns(self, notes: List[NoteObject]) -> List[NoteObject]:
         result = []

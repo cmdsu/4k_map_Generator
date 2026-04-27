@@ -17,13 +17,18 @@ class Validator:
 
         max_chord_size = clamp_max_chord_size(config) if config else 4
         max_jack_length = config.max_jack_length if config and config.max_jack_length > 0 else 9999
-        if config and config.key_style == "jack":
+        if config and config.key_style in ["jack", "stream"]:
             max_jack_length = 9999
         allow_ln = config is None or config.chart_type in ["ln", "hybrid"]
         ln_tail_gap_ms = 30
 
         if min_interval_ms is None:
-            min_interval_ms = 60 if config and config.key_style == "jack" else 40
+            if config and config.key_style == "jack":
+                min_interval_ms = 60
+            elif config and config.key_style == "tech":
+                min_interval_ms = 25
+            else:
+                min_interval_ms = 40
 
         rows: Dict[int, List[NoteObject]] = {}
         for n in notes:
@@ -70,7 +75,10 @@ class Validator:
                     if end_time_ms <= time_ms:
                         continue
                     if config:
-                        min_end = time_ms + config.min_ln_ms
+                        effective_min_ln_ms = config.min_ln_ms
+                        if config.key_style in ["stream", "speed", "tech"]:
+                            effective_min_ln_ms = min(config.min_ln_ms, max(30, end_time_ms - time_ms))
+                        min_end = time_ms + effective_min_ln_ms
                         max_end = time_ms + config.max_ln_ms
                         end_time_ms = max(min_end, min(end_time_ms, max_end))
 

@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from typing import Literal, Any, Dict, List, Optional
+from typing import Literal, Dict, List, Optional
 
 @dataclass
 class DifficultyConfig:
     version: str
     target_star: Optional[float]
     target_msd: Optional[float]
-    chart_type: Literal["rice", "ln", "hybrid", "vibro"]
+    chart_type: Literal["rice", "ln", "hybrid"]
     key_style: Optional[Literal["jack", "tech", "speed", "stream"]]
     allowed_subdivisions: List[str]
     chord_enabled: bool
@@ -19,7 +19,8 @@ class DifficultyConfig:
     min_ln_ms: int
     max_ln_ms: int
     hybrid_weights: Dict[str, float]
-    vibro_options: Dict[str, Any]
+    pattern_temperature: float = 0.35
+    music_influence: float = 0.65
 
 @dataclass
 class NoteObject:
