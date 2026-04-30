@@ -1,21 +1,15 @@
-import html
+﻿import html
 
 import streamlit as st
 
-from om4k_generator.audio_analyzer import AudioAnalyzer
-from om4k_generator.calibrator import build_snap_candidates, generate_to_target_sr
-from om4k_generator.models import DifficultyConfig
-from om4k_generator.osu_exporter import OsuExporter
-from om4k_generator.packager import Packager
-from om4k_generator.style_rules import (
-    DEFAULT_HYBRID_WEIGHTS,
-    HYBRID_LN_TENDENCY_RATIO,
-    HYBRID_PRESETS,
+from om4k_generator.audio.audio_analyzer import AudioAnalyzer
+from om4k_generator.generation.calibrator import build_snap_candidates, generate_to_target_sr
+from om4k_generator.core.models import DifficultyConfig
+from om4k_generator.export.osu_exporter import OsuExporter
+from om4k_generator.export.packager import Packager
+from om4k_generator.core.style_rules import (
     chord_enabled_for,
-    hybrid_ln_ratio_for_tendency,
-    hybrid_weights_for_preset,
     max_chord_bounds_for,
-    normalize_hybrid_weights,
     preserve_allowed_subdivisions,
     recommended_subdivisions,
 )
@@ -30,7 +24,7 @@ TEXT = {
     "zh": {
         "lang_label": "语言 / Language",
         "app_title": "osu!mania 4K 自动练习谱生成器",
-        "app_caption": "基于规则的 4K 谱面生成器：重点控制风格、SR、音乐贴合、LN 合法性和可玩性。",
+        "app_caption": "",
         "upload_header": "输入文件",
         "upload_audio": "上传音频",
         "upload_bg": "上传背景图（可选）",
@@ -44,30 +38,21 @@ TEXT = {
         "sr_tolerance": "SR 波动范围（±）",
         "temperature": "Pattern temperature（变化程度）",
         "temperature_help": "越低越稳定；越高越会改变轨道、同押布局和短模块排列，但仍会尽量贴近目标 SR。",
-        "music_influence": "音乐贴合度",
-        "music_influence_help": "越低越偏纯键型训练；越高越优先把重音、kick 和明显 onset 对应到 note / 多押。",
         "chart_header": "谱面类型与键型",
         "chart_type": "谱面类型",
         "key_style": "键型风格",
-        "hybrid_preset": "Hybrid 方向",
-        "ln_tendency": "LN 倾向",
-        "hybrid_advanced": "高级调试：手动覆盖 Hybrid 软比例",
-        "use_custom_hybrid": "手动设置键型软比例",
-        "use_custom_ln": "手动设置 LN 数值",
-        "hybrid_caption": "Hybrid 会按音乐段落自动选择 LN 骨架、rice burst、tech/release 和 speed 压力；这里选择的是方向，不是硬比例。",
-        "normalized_weights": "当前软偏好",
         "ln_ratio": "LN 数值",
-        "ln_ratio_help": "普通模式建议使用 LN 倾向。这个数值只用于高级调试，算法仍会按音乐段落决定实际 LN。",
+        "ln_ratio_help": "控制 LN 谱面中长条的生成倾向，算法仍会按音乐段落决定实际 LN。",
         "ln_lengths": "LN 长度限制",
         "min_ln": "最短 LN（ms）",
         "max_ln": "最长 LN（ms）",
         "timing_header": "节拍与分辨率",
-        "manual_bpm": "手动 BPM（0 表示自动检测）",
+        "manual_bpm": "手动 BPM（0 表示自动检测，由于自动检测的准确度较低，可以手动输入）",
         "manual_offset_toggle": "使用手动 offset",
         "manual_offset": "手动 offset（ms）",
-        "offset_note": "生成时会在检测/手动 offset 基础上固定减 20ms，用于修正当前导出偏移。",
+        "offset_note": "自动检测 offset 会固定减 20ms；手动 offset 会按输入值原样导出。",
         "allowed_subdivisions": "允许分辨率",
-        "subdivision_help": "这些分辨率会真实限制作图候选。Hybrid 只保留 1/2、1/4、1/8，避免 note 过细碎。",
+        "subdivision_help": "这些分辨率会真实限制作图候选。Tech 只保留 1/4、1/6、1/8，避免 note 过细碎。",
         "chord_header": "同押控制",
         "max_chord": "最大同时按键数",
         "chord_caption": "当前风格会自动管理多押；这里仅限制同一行最多几个键。",
@@ -84,28 +69,17 @@ TEXT = {
         "target_unlimited": "未限制",
         "yes": "是",
         "no": "否",
-        "style_guide": "风格说明",
         "chart_rice": "Rice",
         "chart_ln": "LN",
-        "chart_hybrid": "Hybrid",
         "style_jack": "Jack / 叠键",
         "style_stream": "Stream / 切",
         "style_tech": "Tech / 综合技巧",
         "style_speed": "Speed / 单点高速",
-        "preset_balanced_pp": "Balanced PP（推荐）",
-        "preset_ln_hybrid": "LN Hybrid",
-        "preset_rice_hybrid": "Rice Hybrid",
-        "preset_tech_hybrid": "Tech Hybrid",
-        "preset_speed_hybrid": "Speed Hybrid",
-        "ln_auto": "Auto（按方向自动）",
-        "ln_few": "少",
-        "ln_medium": "中",
-        "ln_many": "多",
     },
     "en": {
         "lang_label": "Language / 语言",
         "app_title": "osu!mania 4K Auto Practice Chart Generator",
-        "app_caption": "A rule-based 4K generator focused on style, SR targeting, music fit, LN legality, and playability.",
+        "app_caption": "",
         "upload_header": "Input Files",
         "upload_audio": "Upload audio",
         "upload_bg": "Upload background (optional)",
@@ -119,20 +93,11 @@ TEXT = {
         "sr_tolerance": "SR tolerance (+/-)",
         "temperature": "Pattern temperature",
         "temperature_help": "Lower values keep patterns steadier; higher values vary lanes, chord layouts, and short modules while targeting SR.",
-        "music_influence": "Music fit",
-        "music_influence_help": "Lower values favor pure style practice; higher values prioritize accents, kicks, and clear onsets for notes/chords.",
         "chart_header": "Chart Type and Style",
         "chart_type": "Chart type",
         "key_style": "Key style",
-        "hybrid_preset": "Hybrid direction",
-        "ln_tendency": "LN tendency",
-        "hybrid_advanced": "Advanced debug: override Hybrid soft weights",
-        "use_custom_hybrid": "Manually set style soft weights",
-        "use_custom_ln": "Manually set LN value",
-        "hybrid_caption": "Hybrid chooses LN skeletons, rice bursts, tech/release, and speed pressure by music section. This is a direction, not a hard ratio.",
-        "normalized_weights": "Current soft bias",
         "ln_ratio": "LN value",
-        "ln_ratio_help": "Use LN tendency in normal mode. This value is for advanced debugging; actual LN placement remains section-aware.",
+        "ln_ratio_help": "Controls LN tendency for LN charts. Actual LN placement still follows music sections.",
         "ln_lengths": "LN length limits",
         "min_ln": "Minimum LN (ms)",
         "max_ln": "Maximum LN (ms)",
@@ -140,9 +105,9 @@ TEXT = {
         "manual_bpm": "Manual BPM (0 for auto)",
         "manual_offset_toggle": "Use manual offset",
         "manual_offset": "Manual offset (ms)",
-        "offset_note": "Export applies a fixed -20ms correction on top of detected/manual offset.",
+        "offset_note": "Auto-detected offset applies a fixed -20ms correction. Manual offset is exported exactly as entered.",
         "allowed_subdivisions": "Allowed subdivisions",
-        "subdivision_help": "These values really constrain chart candidates. Hybrid only keeps 1/2, 1/4, and 1/8 to avoid overly fragmented notes.",
+        "subdivision_help": "These values really constrain chart candidates. Tech only keeps 1/4, 1/6, and 1/8 to avoid overly fragmented notes.",
         "chord_header": "Chord Control",
         "max_chord": "Max simultaneous keys",
         "chord_caption": "The active style manages chord use automatically; this only limits the largest row size.",
@@ -159,55 +124,19 @@ TEXT = {
         "target_unlimited": "Unconstrained",
         "yes": "Yes",
         "no": "No",
-        "style_guide": "Style Guide",
         "chart_rice": "Rice",
         "chart_ln": "LN",
-        "chart_hybrid": "Hybrid",
         "style_jack": "Jack / Chordjack",
         "style_stream": "Stream",
         "style_tech": "Tech",
         "style_speed": "Speed",
-        "preset_balanced_pp": "Balanced PP (Recommended)",
-        "preset_ln_hybrid": "LN Hybrid",
-        "preset_rice_hybrid": "Rice Hybrid",
-        "preset_tech_hybrid": "Tech Hybrid",
-        "preset_speed_hybrid": "Speed Hybrid",
-        "ln_auto": "Auto by direction",
-        "ln_few": "Few",
-        "ln_medium": "Medium",
-        "ln_many": "Many",
     },
 }
 
-STYLE_DESCRIPTIONS = {
-    "zh": {
-        "jack": "低星小叠，中星重叠，高星大叠/满叠；默认最大 4 押，重点是稳定叠键而不是切。",
-        "stream": "从轻切 jumpstream 到强切 handstream；默认最大 3 押，避免 4141 式 jack 化。",
-        "speed": "以高速单点和少量重音同押为主，适合细分辨率的短压力段。",
-        "tech": "混合爆发、楼梯、短锚、切换与 release-tech，强调局部技巧而不是长段 speed。",
-        "hybrid": "按音乐段落自动混合 LN 骨架、rice burst、tech/release 与 speed 压力，不再追求固定百分比。",
-    },
-    "en": {
-        "jack": "Low SR uses smaller stacks, mid SR heavier stacks, high SR large/full stacks. Default max chord is 4 and the goal is stacked jack, not stream.",
-        "stream": "Evolves from light jumpstream to stronger handstream. Max chord is 3 by default to avoid turning into 4141 jack.",
-        "speed": "Fast single-note emphasis with sparse accent chords and short fine-snap pressure sections.",
-        "tech": "Mixes bursts, stairs, short anchors, switching, and release-tech without becoming long speed streams.",
-        "hybrid": "Section-aware mixing of LN skeletons, rice bursts, tech/release, and speed pressure, not fixed percentages.",
-    },
-}
-
-CHART_LABELS = {"rice": "chart_rice", "ln": "chart_ln", "hybrid": "chart_hybrid"}
+CHART_LABELS = {"rice": "chart_rice", "ln": "chart_ln"}
 STYLE_LABELS = {"jack": "style_jack", "stream": "style_stream", "tech": "style_tech", "speed": "style_speed"}
-PRESET_LABELS = {
-    "balanced_pp": "preset_balanced_pp",
-    "ln_hybrid": "preset_ln_hybrid",
-    "rice_hybrid": "preset_rice_hybrid",
-    "tech_hybrid": "preset_tech_hybrid",
-    "speed_hybrid": "preset_speed_hybrid",
-}
-LN_TENDENCY_LABELS = {"auto": "ln_auto", "few": "ln_few", "medium": "ln_medium", "many": "ln_many"}
 SUBDIVISION_OPTIONS = ["1/1", "1/2", "1/3", "1/4", "1/5", "1/6", "1/7", "1/8", "1/10", "1/12", "1/16"]
-HYBRID_SUBDIVISION_OPTIONS = ["1/2", "1/4", "1/8"]
+TECH_SUBDIVISION_OPTIONS = ["1/4", "1/6", "1/8"]
 
 
 def tr(key: str) -> str:
@@ -229,14 +158,6 @@ def note_summary(notes):
         "rows": len(rows),
         "max_chord": max(rows.values()) if rows else 0,
     }
-
-
-def style_description(lang: str, chart_type: str, key_style):
-    if chart_type == "hybrid":
-        return STYLE_DESCRIPTIONS[lang]["hybrid"]
-    if key_style:
-        return STYLE_DESCRIPTIONS[lang][key_style]
-    return ""
 
 
 if "lang" not in st.session_state:
@@ -775,12 +696,7 @@ __THEME_CSS_VARS__
     unsafe_allow_html=True,
 )
 
-hero_secondary = (
-    "把音频分析、键型约束和 SR 校准集中到一个作图控制台。"
-    if lang == "zh"
-    else "Centralize audio analysis, style constraints, and SR calibration in one charting deck."
-)
-hero_tags = ["BPM GRID", "SR TARGET", "MUSIC FIT", "OSZ EXPORT"] if lang == "en" else ["BPM 网格", "星数校准", "音乐贴合", "OSZ 导出"]
+hero_tags = ["BPM GRID", "SR TARGET", "STYLE FLOW", "OSZ EXPORT"] if lang == "en" else ["BPM 网格", "星数校准", "风格控制", "OSZ 导出"]
 hero_tag_html = "".join(f"<span class='studio-pill'>{esc(tag)}</span>" for tag in hero_tags)
 hero_bars = "".join(f"<span style='--i:{idx}'></span>" for idx in range(14))
 
@@ -790,7 +706,6 @@ st.markdown(
         <div>
             <div class="studio-eyebrow">RHYTHM CONTROL DECK</div>
             <div class="studio-title">{esc(tr('app_title'))}</div>
-            <div class="studio-copy">{esc(tr('app_caption'))}<br>{esc(hero_secondary)}</div>
             <div class="studio-actions">{hero_tag_html}</div>
         </div>
         <div class="cover-stage">
@@ -808,32 +723,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-strip_title = "Control Console" if lang == "en" else "生成控制台"
-strip_copy = (
-    "Colors now follow Streamlit's active theme, so native widgets and the custom shell stay readable together."
-    if lang == "en"
-    else "界面颜色现在跟随 Streamlit 当前主题，原生控件和外层视觉会保持一致。"
-)
-st.markdown(
-    f"""
-    <div class="soft-card studio-strip">
-        <div>
-            <p class="studio-strip-title">{esc(strip_title)}</p>
-            <div class="studio-strip-copy">{esc(strip_copy)}</div>
-        </div>
-        <div class="studio-strip-orb"></div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 input_col, style_col, tuning_col = st.columns([1.0, 1.05, 1.0], gap="large")
 
 with input_col:
     section_label = "01 INPUT" if lang == "en" else "01 输入"
     st.markdown(f"<div class='option-card-title'>{esc(section_label)}</div>", unsafe_allow_html=True)
     st.subheader(tr("upload_header"))
-    audio_file = st.file_uploader(tr("upload_audio"), type=["mp3", "wav", "ogg"])
+    audio_file = st.file_uploader(tr("upload_audio"), type=["mp3", "wav", "ogg"], accept_multiple_files=False)
     bg_file = st.file_uploader(tr("upload_bg"), type=["png", "jpg", "jpeg"])
 
     with st.expander(tr("metadata_header"), expanded=True):
@@ -848,84 +744,34 @@ with style_col:
     st.subheader(tr("chart_header"))
     chart_type = st.selectbox(
         tr("chart_type"),
-        ["rice", "ln", "hybrid"],
+        ["rice", "ln"],
         format_func=lambda value: tr(CHART_LABELS[value]),
         key="chart_type_selector",
     )
 
-    hybrid_preset = "balanced_pp"
-    ln_tendency = "auto"
-    hybrid_weights = DEFAULT_HYBRID_WEIGHTS.copy()
-    key_style = None
-    custom_hybrid_weights = False
-    custom_hybrid_ln = False
-
-    if chart_type == "hybrid":
-        st.caption(tr("hybrid_caption"))
-        hybrid_preset = st.selectbox(
-            tr("hybrid_preset"),
-            list(HYBRID_PRESETS.keys()),
-            index=list(HYBRID_PRESETS.keys()).index("balanced_pp"),
-            format_func=lambda value: tr(PRESET_LABELS[value]),
-        )
-        ln_tendency = st.selectbox(
-            tr("ln_tendency"),
-            list(HYBRID_LN_TENDENCY_RATIO.keys()),
-            index=list(HYBRID_LN_TENDENCY_RATIO.keys()).index("auto"),
-            format_func=lambda value: tr(LN_TENDENCY_LABELS[value]),
-        )
-        hybrid_weights = hybrid_weights_for_preset(hybrid_preset)
-        with st.expander(tr("hybrid_advanced"), expanded=False):
-            custom_hybrid_weights = st.checkbox(tr("use_custom_hybrid"), False)
-            if custom_hybrid_weights:
-                hybrid_weights = {
-                    "jack": st.slider(tr("style_jack"), 0.0, 1.0, hybrid_weights["jack"], 0.05),
-                    "stream": st.slider(tr("style_stream"), 0.0, 1.0, hybrid_weights["stream"], 0.05),
-                    "tech": st.slider(tr("style_tech"), 0.0, 1.0, hybrid_weights["tech"], 0.05),
-                    "speed": st.slider(tr("style_speed"), 0.0, 1.0, hybrid_weights["speed"], 0.05),
-                }
-            custom_hybrid_ln = st.checkbox(tr("use_custom_ln"), False)
-    else:
-        key_style = st.selectbox(
-            tr("key_style"),
-            ["jack", "stream", "tech", "speed"],
-            format_func=lambda value: tr(STYLE_LABELS[value]),
-        )
-
-    normalized = normalize_hybrid_weights(hybrid_weights)
-    if chart_type == "hybrid":
-        st.caption(
-            f"{tr('normalized_weights')}: "
-            f"Jack {normalized['jack']:.0%} / Stream {normalized['stream']:.0%} / "
-            f"Tech {normalized['tech']:.0%} / Speed {normalized['speed']:.0%}"
-        )
-
-    description = style_description(lang, chart_type, key_style)
-    if description:
-        st.markdown(
-            f"<div class='soft-card'><strong>{esc(tr('style_guide'))}</strong><br>{esc(description)}</div>",
-            unsafe_allow_html=True,
-        )
-
+    key_style = st.selectbox(
+        tr("key_style"),
+        ["jack", "stream", "tech", "speed"],
+        format_func=lambda value: tr(STYLE_LABELS[value]),
+    )
     st.subheader(tr("chord_header"))
-    chord_enabled = chord_enabled_for(chart_type, key_style, hybrid_weights)
-    min_chord, max_chord, default_chord = max_chord_bounds_for(chart_type, key_style, hybrid_weights)
-    max_chord_size = st.slider(tr("max_chord"), min_chord, max_chord, default_chord)
+    chord_enabled = chord_enabled_for(chart_type, key_style, {})
+    min_chord, max_chord, default_chord = max_chord_bounds_for(chart_type, key_style, {})
+    max_chord_size = st.slider(
+        tr("max_chord"),
+        min_chord,
+        max_chord,
+        default_chord,
+        key=f"max_chord_size_{chart_type}_{key_style}",
+    )
     st.caption(tr("chord_caption"))
 
     ln_ratio = 0.0
     min_ln_ms = 120
     max_ln_ms = 1000
-    if chart_type in ["ln", "hybrid"]:
+    if chart_type == "ln":
         st.subheader("LN")
-        if chart_type == "hybrid":
-            ln_ratio = hybrid_ln_ratio_for_tendency(ln_tendency, hybrid_preset)
-            if custom_hybrid_ln:
-                ln_ratio = st.slider(tr("ln_ratio"), 0.0, 1.0, ln_ratio, 0.05, help=tr("ln_ratio_help"))
-            else:
-                st.caption(f"{tr('ln_ratio')}: {ln_ratio:.2f}")
-        else:
-            ln_ratio = st.slider(tr("ln_ratio"), 0.0, 1.0, 0.45, 0.05, help=tr("ln_ratio_help"))
+        ln_ratio = st.slider(tr("ln_ratio"), 0.0, 1.0, 0.45, 0.05, help=tr("ln_ratio_help"))
         with st.expander(tr("ln_lengths"), expanded=False):
             ln_a, ln_b = st.columns(2)
             with ln_a:
@@ -943,7 +789,6 @@ with tuning_col:
     target_star = st.number_input(tr("target_sr"), 0.0, 15.0, 3.5, step=0.5)
     sr_tolerance = st.number_input(tr("sr_tolerance"), 0.05, 0.5, 0.15, step=0.01)
     pattern_temperature = st.slider(tr("temperature"), 0.0, 1.0, 0.35, 0.05, help=tr("temperature_help"))
-    music_influence = st.slider(tr("music_influence"), 0.0, 1.0, 0.65, 0.05, help=tr("music_influence_help"))
 
     st.subheader(tr("timing_header"))
     manual_bpm = st.number_input(tr("manual_bpm"), 0.0, step=1.0)
@@ -956,8 +801,8 @@ with tuning_col:
 
     preview_bpm = manual_bpm if manual_bpm > 0 else 220.0
     default_subdivisions = recommended_subdivisions(preview_bpm, chart_type, key_style, target_star if target_star > 0 else None)
-    if chart_type == "hybrid":
-        subdivision_options = HYBRID_SUBDIVISION_OPTIONS
+    if key_style == "tech":
+        subdivision_options = TECH_SUBDIVISION_OPTIONS
     else:
         subdivision_options = SUBDIVISION_OPTIONS
     allowed_subdivisions = preserve_allowed_subdivisions(
@@ -965,19 +810,19 @@ with tuning_col:
             tr("allowed_subdivisions"),
             subdivision_options,
             default=default_subdivisions,
-            key=f"allowed_subdivisions_{chart_type}_{key_style or hybrid_preset}_{int(preview_bpm)}_{target_star}",
+            key=f"allowed_subdivisions_{chart_type}_{key_style}_{int(preview_bpm)}_{target_star}",
             help=tr("subdivision_help"),
         )
     )
 
-preview_style = tr(PRESET_LABELS[hybrid_preset]) if chart_type == "hybrid" else tr(STYLE_LABELS[key_style])
+preview_style = tr(STYLE_LABELS[key_style])
 preview_audio = audio_file.name if audio_file else ("等待音频输入" if lang == "zh" else "Awaiting audio input")
 preview_target = f"{target_star:.1f} SR +/- {sr_tolerance:.2f}" if target_star > 0 else tr("target_unlimited")
 preview_tags = [
     tr(CHART_LABELS[chart_type]),
     preview_style,
     f"Chord x{max_chord_size}",
-    f"Music {music_influence:.0%}",
+
 ]
 preview_tag_html = "".join(f"<span>{esc(tag)}</span>" for tag in preview_tags)
 preview_heading = "当前工程快照" if lang == "zh" else "Current Project Snapshot"
@@ -1009,31 +854,28 @@ config = DifficultyConfig(
     chord_enabled=chord_enabled,
     max_chord_size=max_chord_size,
     chord_probability=0.35,
-    max_jack_length=4,
-    max_anchor_length=4,
+    max_jack_length=3,
+    max_anchor_length=3,
     hand_balance=0.5,
     ln_ratio=ln_ratio,
     min_ln_ms=int(min_ln_ms),
     max_ln_ms=int(max_ln_ms),
-    hybrid_weights=hybrid_weights,
     pattern_temperature=pattern_temperature,
-    music_influence=music_influence,
+    music_influence=1.0,
 )
 
 with st.expander(tr("settings_preview"), expanded=False):
-    active_style = hybrid_preset if chart_type == "hybrid" else key_style or chart_type
     target_text = f"{config.target_star:.2f} +/- {sr_tolerance:.2f}" if config.target_star is not None else tr("target_unlimited")
     st.write(
         {
             "chart_type": chart_type,
-            "style": active_style,
+            "style": key_style,
             "target_sr": target_text,
             "temperature": pattern_temperature,
-            "music_influence": music_influence,
+
             "max_chord_size": max_chord_size,
             "ln_ratio": ln_ratio,
             "subdivisions": allowed_subdivisions,
-            "hybrid_weights": normalize_hybrid_weights(hybrid_weights) if chart_type == "hybrid" else None,
         }
     )
 
@@ -1051,7 +893,8 @@ if st.button(tr("generate"), type="primary", use_container_width=True):
                 manual_offset if use_manual_offset else None,
             )
             analysis = analyzer.analyze()
-            analysis["offset_ms"] -= 20
+            if not use_manual_offset:
+                analysis["offset_ms"] -= 20
             snapped = build_snap_candidates(analysis, config)
 
         detected_cols = st.columns(4)
@@ -1061,7 +904,11 @@ if st.button(tr("generate"), type="primary", use_container_width=True):
         detected_cols[3].metric("Subdivisions", ", ".join(allowed_subdivisions))
 
         with st.spinner(tr("generating")):
-            best_notes, best_est_sr, target_met, attempts = generate_to_target_sr(config, analysis, snapped, tolerance=sr_tolerance)
+            try:
+                best_notes, best_est_sr, target_met, attempts = generate_to_target_sr(config, analysis, snapped, tolerance=sr_tolerance)
+            except NotImplementedError as exc:
+                st.error(str(exc))
+                st.stop()
 
             if config.target_star is not None and not target_met:
                 st.error(f"{tr('target_failed')} Target: {config.target_star:.2f}, Actual: {best_est_sr:.2f}.")
@@ -1078,7 +925,7 @@ if st.button(tr("generate"), type="primary", use_container_width=True):
         result_cols[5].metric("Max Chord", f"{summary['max_chord']}")
         st.caption(f"Attempts: {attempts}")
 
-        final_style = tr(PRESET_LABELS[hybrid_preset]) if chart_type == "hybrid" else tr(STYLE_LABELS[key_style])
+        final_style = tr(STYLE_LABELS[key_style])
         final_target = f"{config.target_star:.2f} +/- {sr_tolerance:.2f}" if config.target_star is not None else tr("target_unlimited")
         final_tags = [
             f"SR {best_est_sr:.2f}",
@@ -1135,4 +982,5 @@ if st.button(tr("generate"), type="primary", use_container_width=True):
                 mime="application/zip",
                 use_container_width=True,
             )
+
 

@@ -19,7 +19,7 @@ class Validator:
         max_jack_length = config.max_jack_length if config and config.max_jack_length > 0 else 9999
         if config and config.key_style in ["jack", "stream"]:
             max_jack_length = 9999
-        allow_ln = config is None or config.chart_type in ["ln", "hybrid"]
+        allow_ln = config is None or config.chart_type == "ln"
         ln_tail_gap_ms = 30
 
         if min_interval_ms is None:
@@ -99,4 +99,66 @@ class Validator:
                 if n.is_ln and n.end_time_ms is not None:
                     last_ln_tail_time[n.lane] = n.end_time_ms
 
+        fixed = Validator._sanitize_ln_adjacency(fixed, config, snap_points)
         return fixed
+
+    @staticmethod
+    def _sanitize_ln_adjacency(
+        notes: List[NoteObject],
+        config: Optional[DifficultyConfig],
+        snap_points: Optional[List[int]],
+    ) -> List[NoteObject]:
+        if not notes:
+            return notes
+        if config is None or config.chart_type != "ln":
+            return notes
+
+        safe_gap = 75
+        min_ln_ms = max(60, int(config.min_ln_ms))
+        snap_list = sorted(set(snap_points or []))
+
+        by_lane: Dict[int, List[NoteObject]] = {lane: [] for lane in [0, 1, 2, 3]}
+        for note in sorted(notes, key=lambda item: (item.time_ms, item.lane, item.end_time_ms or -1)):
+            by_lane[note.lane].append(note)
+
+        replacements: Dict[Tuple[int, int, Optional[int]], Optional[NoteObject]] = {}
+
+        for lane, lane_notes in by_lane.items():
+            for index, note in enumerate(lane_notes):
+                if not note.is_ln or note.end_time_ms is None:
+                    continue
+
+                previous_time = lane_notes[index - 1].time_ms if index > 0 else -999999
+                next_time = lane_notes[index + 1].time_ms if index + 1 < len(lane_notes) else 999999999
+                head_too_close = note.time_ms - previous_time < safe_gap
+                tail_too_close = next_time - note.end_time_ms < safe_gap
+                key = (note.time_ms, note.lane, note.end_time_ms)
+
+                if head_too_close:
+                    replacements[key] = None
+                    continue
+
+                if tail_too_close:
+                    latest_tail = next_time - safe_gap
+                    if snap_list:
+                        candidates = [
+                            time_ms
+                            for time_ms in snap_list
+                            if note.time_ms + min_ln_ms <= time_ms <= latest_tail
+                        ]
+                        latest_tail = candidates[-1] if candidates else latest_tail
+                    if latest_tail - note.time_ms >= min_ln_ms:
+                        replacements[key] = NoteObject(time_ms=note.time_ms, lane=note.lane, end_time_ms=latest_tail)
+                    else:
+                        replacements[key] = None
+
+        if not replacements:
+            return notes
+
+        cleaned: List[NoteObject] = []
+        for note in notes:
+            key = (note.time_ms, note.lane, note.end_time_ms)
+            replacement = replacements.get(key, note)
+            if replacement is not None:
+                cleaned.append(replacement)
+        return sorted(cleaned, key=lambda item: (item.time_ms, item.lane, item.end_time_ms or -1))

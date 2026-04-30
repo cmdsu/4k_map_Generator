@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from typing import Literal, Dict, List, Optional
+from typing import Literal, List, Optional
 
 @dataclass
 class DifficultyConfig:
     version: str
     target_star: Optional[float]
     target_msd: Optional[float]
-    chart_type: Literal["rice", "ln", "hybrid"]
+    chart_type: Literal["rice", "ln"]
     key_style: Optional[Literal["jack", "tech", "speed", "stream"]]
     allowed_subdivisions: List[str]
     chord_enabled: bool
@@ -18,9 +18,8 @@ class DifficultyConfig:
     ln_ratio: float
     min_ln_ms: int
     max_ln_ms: int
-    hybrid_weights: Dict[str, float]
     pattern_temperature: float = 0.35
-    music_influence: float = 0.65
+    music_influence: float = 1.0
 
 @dataclass
 class NoteObject:
@@ -42,3 +41,4 @@ class AudioAnalysisResult:
     silent_regions: List[tuple[int, int]]
     beat_grid_ms: List[int]
     snap_points_ms: List[int]
+

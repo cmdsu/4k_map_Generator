@@ -1,5 +1,6 @@
-from .models import DifficultyConfig, NoteObject
 from typing import List
+
+from ..core.models import DifficultyConfig, NoteObject
 
 class OsuExporter:
     @staticmethod

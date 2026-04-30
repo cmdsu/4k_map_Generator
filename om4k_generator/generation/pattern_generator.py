@@ -1,15 +1,14 @@
 import random
 from typing import List, Optional, Set, Tuple
 
-from .models import DifficultyConfig, NoteObject
-from .style_rules import clamp_max_chord_size, normalize_hybrid_weights
+from ..core.models import DifficultyConfig, NoteObject
+from ..core.style_rules import clamp_max_chord_size
 
 
 class PatternGenerator:
     def __init__(self, config: DifficultyConfig):
         self.config = config
         self.lanes = [0, 1, 2, 3]
-        self.hybrid_weights = normalize_hybrid_weights(config.hybrid_weights)
         self.stream_order = [0, 2, 1, 3]
         self.stream_index = 0
         self.tech_patterns = [[0, 2, 1, 3], [0, 1, 3, 2], [1, 3, 0, 2], [2, 0, 3, 1]]
@@ -36,14 +35,6 @@ class PatternGenerator:
         return float(energy_curve[idx]) >= threshold
 
     def _select_style(self) -> Optional[str]:
-        if self.config.chart_type == "hybrid":
-            roll = random.random()
-            cumulative = 0.0
-            for style, weight in self.hybrid_weights.items():
-                cumulative += weight
-                if roll <= cumulative:
-                    return style
-            return "tech"
         return self.config.key_style or "tech"
 
     def _timing_limits(self, style: Optional[str], density_multiplier: float, median_interval: float) -> tuple[float, float]:
@@ -216,7 +207,7 @@ class PatternGenerator:
             last_lanes = chosen
             last_note_time = t
 
-        if self.config.chart_type in ["ln", "hybrid"]:
+        if self.config.chart_type == "ln":
             notes = self._convert_to_lns(notes)
 
         return notes
